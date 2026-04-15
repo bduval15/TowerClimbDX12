@@ -26,12 +26,14 @@ bool TowerGameApp::Initialize() {
     ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
 
     // STARTING POSITION: Inside the tower, on the floor
-    mCamera.SetPosition(0.0f, 5.0f, -30.0f);
+    mCamera.SetPosition(0.0f, eyeLevel, -30.0f);
 
     BuildRootSignature();
     BuildShadersAndInputLayout();
     BuildTowerGeometry();
+    BuildCarGeometry();
     BuildFrameResources();
+    BuildRenderItems();
     BuildPSOs();
 
     ThrowIfFailed(mCommandList->Close());
@@ -71,7 +73,7 @@ void TowerGameApp::Update(const GameTimer& gt) {
 
     // 3. JUMPING & GRAVITY
     if ((GetAsyncKeyState(VK_SPACE) & 0x8000) && !mIsJumping) {
-        mVerticalVelocity = 60.0f; // Jump force
+        mVerticalVelocity = 90.0f; // Jump force
         mIsJumping = true;
     }
     mVerticalVelocity -= 150.0f * dt; // Gravity
@@ -82,6 +84,22 @@ void TowerGameApp::Update(const GameTimer& gt) {
 
     for (auto& ri : mOpaqueRitems) {
         if (ri->ObjCBIndex < 2) continue; // Skip walls (0) and floor (1)
+
+        // If it's the car, handle differently than platform
+        if (ri->ObjCBIndex == 118) {
+            // Collision check (AABB)
+            if (pos.x > 60.0f - 18.0f && pos.x < 60.0f + 18.0f &&
+                pos.z > 70.0f - 35.0f && pos.z < 70.0f + 35.0f) {
+
+                // If falling and eye-level is about to drop through the car
+                if (mVerticalVelocity <= 0 && pos.y >= carHeight + 4.5f && nextY <= carHeight + eyeLevel) {
+                    nextY = carHeight + eyeLevel; // Eye level height
+                    mVerticalVelocity = 0.0f;
+                    mIsJumping = false;
+                    break;
+                }
+            }
+        }
 
         // Calculate platform's current animated rotation (Automatic Movement Mark)
         float time = gt.TotalTime();
@@ -94,23 +112,36 @@ void TowerGameApp::Update(const GameTimer& gt) {
         float py = animatedWorld.r[3].m128_f32[1];
         float pz = animatedWorld.r[3].m128_f32[2];
 
+        // Calculate platform's previous animated rotation
+        float previousAngle = 0.4f * (time - dt) * (ri->ObjCBIndex % 2 == 0 ? 1 : -1);
+        XMMATRIX previousAnimatedWorld = baseWorld * XMMatrixRotationY(previousAngle);
+
+        float prvPx = previousAnimatedWorld.r[3].m128_f32[0];
+        float prvPy = previousAnimatedWorld.r[3].m128_f32[1];
+        float prvPz = previousAnimatedWorld.r[3].m128_f32[2];
+
         // Collision check (AABB)
         if (pos.x > px - 8.0f && pos.x < px + 8.0f &&
             pos.z > pz - 8.0f && pos.z < pz + 8.0f) {
 
             // If falling and eye-level is about to drop through the platform top
-            if (mVerticalVelocity <= 0 && pos.y >= py + 4.5f && nextY <= py + 5.0f) {
-                nextY = py + 5.0f; // Eye level height
+            if (mVerticalVelocity <= 0 && pos.y >= py + 4.5f && nextY <= py + eyeLevel) {
+                nextY = py + eyeLevel; // Eye level height
                 mVerticalVelocity = 0.0f;
                 mIsJumping = false;
+
+                // Also make player move with platform
+                pos.x += px - prvPx;
+                pos.y += py - prvPy;
+                pos.z += pz - prvPz;
                 break;
             }
         }
     }
 
-    // 5. STATIC FLOOR COLLISION (Y=5 is ground eye-level)
-    if (nextY < 5.0f) {
-        nextY = 5.0f;
+    // 5. STATIC FLOOR COLLISION (eye-level equal to Y=[variable value])
+    if (nextY < eyeLevel) {
+        nextY = eyeLevel;
         mVerticalVelocity = 0.0f;
         mIsJumping = false;
     }
@@ -139,6 +170,23 @@ void TowerGameApp::Update(const GameTimer& gt) {
     XMStoreFloat4x4(&passCB.ViewProj, XMMatrixTranspose(viewProj));
     passCB.EyePosW = mCamera.GetPosition3f();
     passCB.TotalTime = gt.TotalTime();
+
+    float lightHeights[6] = { 50.0f, 250.0f, 450.0f, 650.0f, 850.0f, 1050.0f };
+    int lightIndex = 0;
+
+    for (int ring = 0; ring < 6; ++ring) {
+        for (int i = 0; i < 8; ++i) {
+            float angle = i * (MathHelper::Pi / 4.0f);
+
+            passCB.Lights[lightIndex].Position = { 145.0f * cos(angle), lightHeights[ring], 145.0f * sin(angle) };
+            passCB.Lights[lightIndex].Strength = { 0.8f, 0.8f, 0.2f };
+            passCB.Lights[lightIndex].FalloffStart = 20.0f;
+            passCB.Lights[lightIndex].FalloffEnd = 120.0f;
+
+            lightIndex++;
+        }
+    }
+
     mCurrFrameResource->PassCB->CopyData(0, passCB);
 }
 
@@ -155,7 +203,7 @@ void TowerGameApp::Draw(const GameTimer& gt) {
 
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = CurrentBackBufferView();
     D3D12_CPU_DESCRIPTOR_HANDLE dsv = DepthStencilView();
-    mCommandList->ClearRenderTargetView(rtv, Colors::Black, 0, nullptr);
+    mCommandList->ClearRenderTargetView(rtv, Colors::LightBlue, 0, nullptr);
     mCommandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
     mCommandList->OMSetRenderTargets(1, &rtv, true, &dsv);
 
@@ -171,14 +219,19 @@ void TowerGameApp::Draw(const GameTimer& gt) {
         mCommandList->IASetPrimitiveTopology(ri->PrimitiveType);
 
         XMMATRIX modelWorld = XMLoadFloat4x4(&ri->World);
-        if (ri->ObjCBIndex >= 2) {
+        if (ri->ObjCBIndex >= 2 && ri->ObjCBIndex <= 91) {
             float angle = 0.4f * gt.TotalTime() * (ri->ObjCBIndex % 2 == 0 ? 1 : -1);
             modelWorld = modelWorld * XMMatrixRotationY(angle);
         }
 
         ObjectConstants objCB;
         XMStoreFloat4x4(&objCB.World, XMMatrixTranspose(modelWorld));
-        objCB.MaterialIndex = (ri->ObjCBIndex >= 2) ? 1 : 0;
+        
+        // 0=Wall/Floor, 1=Platforms, 3=Wall Lights
+        if (ri->ObjCBIndex >= 93) objCB.MaterialIndex = 3;
+        else if (ri->ObjCBIndex >= 2) objCB.MaterialIndex = 1;
+        else objCB.MaterialIndex = 0;
+
         mCurrFrameResource->ObjectCB->CopyData(ri->ObjCBIndex, objCB);
 
         auto addr = mCurrFrameResource->ObjectCB->Resource()->GetGPUVirtualAddress() + (ri->ObjCBIndex * objCBByteSize);
@@ -196,12 +249,51 @@ void TowerGameApp::Draw(const GameTimer& gt) {
 
         ObjectConstants objCB;
         XMStoreFloat4x4(&objCB.World, XMMatrixTranspose(XMLoadFloat4x4(&ri->World)));
-        objCB.MaterialIndex = 2; // Orb material — handled in shader
+        objCB.MaterialIndex = 2; // Orb material ï¿½ handled in shader
         mCurrFrameResource->ObjectCB->CopyData(ri->ObjCBIndex, objCB);
 
         auto addr = mCurrFrameResource->ObjectCB->Resource()->GetGPUVirtualAddress() + (ri->ObjCBIndex * objCBByteSize);
         mCommandList->SetGraphicsRootConstantBufferView(1, addr);
         mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
+    }
+
+    // --- PASS 3: Draw Geometry Shader Sparks ---
+    mCommandList->SetPipelineState(mSparkPSO.Get());
+    for (auto& ri : mSparkRitems) {
+        mCommandList->IASetVertexBuffers(0, 1, &ri->Geo->VertexBufferView());
+        mCommandList->IASetIndexBuffer(&ri->Geo->IndexBufferView());
+        mCommandList->IASetPrimitiveTopology(ri->PrimitiveType); // Will set D3D_PRIMITIVE_TOPOLOGY_POINTLIST
+
+        ObjectConstants objCB;
+        XMStoreFloat4x4(&objCB.World, XMMatrixTranspose(XMLoadFloat4x4(&ri->World)));
+        objCB.MaterialIndex = 2; // Share the pulsing color of the Orb!
+
+        mCurrFrameResource->ObjectCB->CopyData(ri->ObjCBIndex, objCB);
+
+        auto addr = mCurrFrameResource->ObjectCB->Resource()->GetGPUVirtualAddress() + (ri->ObjCBIndex * objCBByteSize);
+        mCommandList->SetGraphicsRootConstantBufferView(1, addr);
+        mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
+    }
+
+    // --- PASS 4: Draw Torch Billboards ---
+    mCommandList->SetPipelineState(mTorchPSO.Get());
+    for (auto& ri : mTorchRitems) {
+        mCommandList->IASetVertexBuffers(0, 1, &ri->Geo->VertexBufferView());
+        mCommandList->IASetIndexBuffer(&ri->Geo->IndexBufferView());
+        mCommandList->IASetPrimitiveTopology(ri->PrimitiveType);
+
+        ObjectConstants objCB;
+        XMStoreFloat4x4(&objCB.World, XMMatrixTranspose(XMLoadFloat4x4(&ri->World)));
+        objCB.MaterialIndex = 4; // New torch material index
+        mCurrFrameResource->ObjectCB->CopyData(ri->ObjCBIndex, objCB);
+
+        auto addr = mCurrFrameResource->ObjectCB->Resource()->GetGPUVirtualAddress()
+            + (ri->ObjCBIndex * objCBByteSize);
+        mCommandList->SetGraphicsRootConstantBufferView(1, addr);
+        mCommandList->DrawIndexedInstanced(
+            ri->IndexCount, 1,
+            ri->StartIndexLocation,
+            ri->BaseVertexLocation, 0);
     }
 
     auto b2 = CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
@@ -219,10 +311,11 @@ void TowerGameApp::Draw(const GameTimer& gt) {
 void TowerGameApp::BuildTowerGeometry() {
     GeometryGenerator geoGen;
     GeometryGenerator::MeshData box = geoGen.CreateBox(12.0f, 1.0f, 12.0f, 3);
-    GeometryGenerator::MeshData cylinder = geoGen.CreateCylinder(150.0f, 150.0f, 1000.0f, 60, 60);
+    GeometryGenerator::MeshData cylinder = geoGen.CreateCylinder(150.0f, 150.0f, 1500.0f, 60, 60);
     GeometryGenerator::MeshData grid = geoGen.CreateGrid(400.0f, 400.0f, 20, 20);
     // NEW: Sphere for the goal orb at the top of the tower
     GeometryGenerator::MeshData sphere = geoGen.CreateSphere(20.0f, 32, 32);
+    GeometryGenerator::MeshData lightBox = geoGen.CreateBox(4.0f, 4.0f, 1.0f, 0);
 
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
@@ -238,11 +331,12 @@ void TowerGameApp::BuildTowerGeometry() {
         for (auto& i : data.Indices32) indices.push_back(i);
         };
 
-    SubmeshGeometry boxSub, cylSub, gridSub, sphereSub;
+    SubmeshGeometry boxSub, cylSub, gridSub, sphereSub, lightBoxSub;
     addMesh(box, boxSub);
     addMesh(cylinder, cylSub);
     addMesh(grid, gridSub);
-    addMesh(sphere, sphereSub); // NEW
+    addMesh(sphere, sphereSub);
+    addMesh(lightBox, lightBoxSub);
 
     auto geo = std::make_unique<MeshGeometry>();
     geo->Name = "towerGeo";
@@ -255,14 +349,176 @@ void TowerGameApp::BuildTowerGeometry() {
     geo->DrawArgs["box"] = boxSub;
     geo->DrawArgs["cylinder"] = cylSub;
     geo->DrawArgs["grid"] = gridSub;
-    geo->DrawArgs["sphere"] = sphereSub; // NEW
+    geo->DrawArgs["sphere"] = sphereSub;
+    geo->DrawArgs["lightBox"] = lightBoxSub;
     mGeometries[geo->Name] = std::move(geo);
 
+    // 6. Energy Sparks (ObjCBIndex 117)
+    // We only need to define Positions. The GS will build the actual geometry.
+    std::vector<Vertex> sparkVertices;
+    std::vector<std::uint32_t> sparkIndices;
+
+    for (int i = 0; i < 50; ++i) {
+        Vertex v;
+        // Random point within a 60 unit radius around the orb
+        v.Pos.x = (MathHelper::RandF() * 120.0f) - 60.0f;
+        v.Pos.y = 1100.0f + ((MathHelper::RandF() * 40.0f) - 20.0f);
+        v.Pos.z = (MathHelper::RandF() * 120.0f) - 60.0f;
+
+        v.Normal = { 0, 1, 0 }; // Ignored by GS
+        v.TexC = { 0, 0 };      // Ignored by GS
+
+        sparkVertices.push_back(v);
+        sparkIndices.push_back(i);
+    }
+
+    // Build the MeshGeometry for the points
+    auto sparkGeo = std::make_unique<MeshGeometry>();
+    sparkGeo->Name = "sparkGeo";
+    sparkGeo->VertexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(), mCommandList.Get(), sparkVertices.data(), (UINT)sparkVertices.size() * sizeof(Vertex), sparkGeo->VertexBufferUploader);
+    sparkGeo->IndexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(), mCommandList.Get(), sparkIndices.data(), (UINT)sparkIndices.size() * sizeof(uint32_t), sparkGeo->IndexBufferUploader);
+    sparkGeo->VertexByteStride = sizeof(Vertex);
+    sparkGeo->VertexBufferByteSize = (UINT)sparkVertices.size() * sizeof(Vertex);
+    sparkGeo->IndexFormat = DXGI_FORMAT_R32_UINT;
+    sparkGeo->IndexBufferByteSize = (UINT)sparkIndices.size() * sizeof(uint32_t);
+
+    SubmeshGeometry sparkSub;
+    sparkSub.IndexCount = (UINT)sparkIndices.size();
+    sparkSub.StartIndexLocation = 0;
+    sparkSub.BaseVertexLocation = 0;
+    sparkGeo->DrawArgs["sparks"] = sparkSub;
+
+    mGeometries[sparkGeo->Name] = std::move(sparkGeo);
+
+    // Place torches in rings around the tower interior wall
+    std::vector<Vertex> torchVertices;
+    std::vector<std::uint32_t> torchIndices;
+
+    float lightHeights[6] = { 50.0f, 250.0f, 450.0f, 650.0f, 850.0f, 1050.0f }; // Match the box heights
+    int torchesPerRing = 8;
+    int torchCount = 0;
+
+    for (float h : lightHeights) {
+        for (int i = 0; i < torchesPerRing; ++i) {
+            float angle = i * (2.0f * MathHelper::Pi / torchesPerRing);
+
+            // Use 146.0f radius to sit flush against the box (which is at 148.0f)
+            float r = 146.0f;
+
+            Vertex v;
+            // Add +2.0f to 'h' so the flame base sits on top of the 4-unit tall box
+            v.Pos = { r * cosf(angle), h + 2.0f, r * sinf(angle) };
+            v.Normal = { -cosf(angle), 0.0f, -sinf(angle) };
+            v.TexC = { 0.0f, 0.0f };
+            torchVertices.push_back(v);
+            torchIndices.push_back(torchCount++);
+        }
+    }
+
+    auto torchGeo = std::make_unique<MeshGeometry>();
+    torchGeo->Name = "torchGeo";
+    torchGeo->VertexBufferGPU = d3dUtil::CreateDefaultBuffer(
+        md3dDevice.Get(), mCommandList.Get(),
+        torchVertices.data(), (UINT)torchVertices.size() * sizeof(Vertex),
+        torchGeo->VertexBufferUploader);
+    torchGeo->IndexBufferGPU = d3dUtil::CreateDefaultBuffer(
+        md3dDevice.Get(), mCommandList.Get(),
+        torchIndices.data(), (UINT)torchIndices.size() * sizeof(uint32_t),
+        torchGeo->IndexBufferUploader);
+    torchGeo->VertexByteStride = sizeof(Vertex);
+    torchGeo->VertexBufferByteSize = (UINT)torchVertices.size() * sizeof(Vertex);
+    torchGeo->IndexFormat = DXGI_FORMAT_R32_UINT;
+    torchGeo->IndexBufferByteSize = (UINT)torchIndices.size() * sizeof(uint32_t);
+
+    SubmeshGeometry torchSub;
+    torchSub.IndexCount = (UINT)torchIndices.size();
+    torchSub.StartIndexLocation = 0;
+    torchSub.BaseVertexLocation = 0;
+    torchGeo->DrawArgs["torches"] = torchSub;
+
+    mGeometries[torchGeo->Name] = std::move(torchGeo);
+
+}
+
+void TowerGameApp::BuildCarGeometry() {
+    // NEW - Car
+    std::ifstream fin("Models/car.txt");
+
+    if (!fin)
+    {
+        MessageBox(0, L"car.txt not found.", 0, 0);
+        return;
+    }
+
+    UINT vcount = 0;
+    UINT tcount = 0;
+    std::string ignore;
+
+    fin >> ignore >> vcount;
+    fin >> ignore >> tcount;
+    fin >> ignore >> ignore >> ignore >> ignore;
+
+    std::vector<Vertex> carVertices(vcount);
+    for (UINT i = 0; i < vcount; ++i)
+    {
+        fin >> carVertices[i].Pos.x >> carVertices[i].Pos.y >> carVertices[i].Pos.z;
+        fin >> carVertices[i].Normal.x >> carVertices[i].Normal.y >> carVertices[i].Normal.z;
+    }
+
+    fin >> ignore;
+    fin >> ignore;
+    fin >> ignore;
+
+    std::vector<std::int32_t> carIndices(3 * tcount);
+    for (UINT i = 0; i < tcount; ++i)
+    {
+        fin >> carIndices[i * 3 + 0] >> carIndices[i * 3 + 1] >> carIndices[i * 3 + 2];
+    }
+
+    fin.close();
+
+    const UINT vbByteSize = (UINT)carVertices.size() * sizeof(Vertex);
+
+    const UINT ibByteSize = (UINT)carIndices.size() * sizeof(std::int32_t);
+
+    auto geoForCar = std::make_unique<MeshGeometry>();
+    geoForCar->Name = "carGeo";
+
+    ThrowIfFailed(D3DCreateBlob(vbByteSize, &geoForCar->VertexBufferCPU));
+    CopyMemory(geoForCar->VertexBufferCPU->GetBufferPointer(), carVertices.data(), vbByteSize);
+
+    ThrowIfFailed(D3DCreateBlob(ibByteSize, &geoForCar->IndexBufferCPU));
+    CopyMemory(geoForCar->IndexBufferCPU->GetBufferPointer(), carIndices.data(), ibByteSize);
+
+    geoForCar->VertexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
+        mCommandList.Get(), carVertices.data(), vbByteSize, geoForCar->VertexBufferUploader);
+
+    geoForCar->IndexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
+        mCommandList.Get(), carIndices.data(), ibByteSize, geoForCar->IndexBufferUploader);
+
+    geoForCar->VertexByteStride = sizeof(Vertex);
+    geoForCar->VertexBufferByteSize = vbByteSize;
+    geoForCar->IndexFormat = DXGI_FORMAT_R32_UINT;
+    geoForCar->IndexBufferByteSize = ibByteSize;
+
+    SubmeshGeometry submesh;
+    submesh.IndexCount = (UINT)carIndices.size();
+    submesh.StartIndexLocation = 0;
+    submesh.BaseVertexLocation = 0;
+
+    geoForCar->DrawArgs["car"] = submesh;
+
+    mGeometries[geoForCar->Name] = std::move(geoForCar);
+}
+
+void TowerGameApp::BuildRenderItems() {
     // 1. Tower Walls
     auto walls = std::make_unique<RenderItem>();
     XMStoreFloat4x4(&walls->World, XMMatrixTranslation(0, 450, 0));
     walls->ObjCBIndex = 0; walls->Geo = mGeometries["towerGeo"].get();
-    walls->IndexCount = cylSub.IndexCount; walls->StartIndexLocation = cylSub.StartIndexLocation; walls->BaseVertexLocation = cylSub.BaseVertexLocation;
+    walls->IndexCount = walls->Geo->DrawArgs["cylinder"].IndexCount;
+    walls->StartIndexLocation = walls->Geo->DrawArgs["cylinder"].StartIndexLocation;
+    walls->BaseVertexLocation = walls->Geo->DrawArgs["cylinder"].BaseVertexLocation;
     mOpaqueRitems.push_back(walls.get());
     mAllRitems.push_back(std::move(walls));
 
@@ -270,7 +526,9 @@ void TowerGameApp::BuildTowerGeometry() {
     auto ground = std::make_unique<RenderItem>();
     XMStoreFloat4x4(&ground->World, XMMatrixTranslation(0, 0, 0));
     ground->ObjCBIndex = 1; ground->Geo = mGeometries["towerGeo"].get();
-    ground->IndexCount = gridSub.IndexCount; ground->StartIndexLocation = gridSub.StartIndexLocation; ground->BaseVertexLocation = gridSub.BaseVertexLocation;
+    ground->IndexCount = ground->Geo->DrawArgs["grid"].IndexCount;
+    ground->StartIndexLocation = ground->Geo->DrawArgs["grid"].StartIndexLocation;
+    ground->BaseVertexLocation = ground->Geo->DrawArgs["grid"].BaseVertexLocation;
     mOpaqueRitems.push_back(ground.get());
     mAllRitems.push_back(std::move(ground));
 
@@ -282,18 +540,88 @@ void TowerGameApp::BuildTowerGeometry() {
         float y = 12.0f + (i * 12.0f);
         XMStoreFloat4x4(&ri->World, XMMatrixTranslation(r * cos(theta), y, r * sin(theta)));
         ri->ObjCBIndex = i + 2; ri->Geo = mGeometries["towerGeo"].get();
-        ri->IndexCount = boxSub.IndexCount; ri->StartIndexLocation = boxSub.StartIndexLocation; ri->BaseVertexLocation = boxSub.BaseVertexLocation;
+        ri->IndexCount = ri->Geo->DrawArgs["box"].IndexCount;
+        ri->StartIndexLocation = ri->Geo->DrawArgs["box"].StartIndexLocation;
+        ri->BaseVertexLocation = ri->Geo->DrawArgs["box"].BaseVertexLocation;
         mOpaqueRitems.push_back(ri.get());
         mAllRitems.push_back(std::move(ri));
     }
 
-    // 4. NEW: Goal Orb — transparent sphere at the top of the tower (ObjCBIndex = 92)
+    // 4. Goal Orb ï¿½ transparent sphere at the top of the tower (ObjCBIndex = 92)
     auto orb = std::make_unique<RenderItem>();
     XMStoreFloat4x4(&orb->World, XMMatrixTranslation(0.0f, 1100.0f, 0.0f));
     orb->ObjCBIndex = 92; orb->Geo = mGeometries["towerGeo"].get();
-    orb->IndexCount = sphereSub.IndexCount; orb->StartIndexLocation = sphereSub.StartIndexLocation; orb->BaseVertexLocation = sphereSub.BaseVertexLocation;
+    orb->IndexCount = orb->Geo->DrawArgs["sphere"].IndexCount;
+    orb->StartIndexLocation = orb->Geo->DrawArgs["sphere"].StartIndexLocation;
+    orb->BaseVertexLocation = orb->Geo->DrawArgs["sphere"].BaseVertexLocation;
     mOrbRitem = orb.get(); // Keep raw pointer for Draw()
     mAllRitems.push_back(std::move(orb));
+
+    // 5. Wall Light Fixtures (ObjCBIndex 93 through 116)
+    float lightHeights[6] = { 50.0f, 250.0f, 450.0f, 650.0f, 850.0f, 1050.0f }; // Floor, Midpoint, Ceiling
+    int lightIndex = 0;
+
+    for (int ring = 0; ring < 6; ++ring) {
+        for (int i = 0; i < 8; ++i) {
+            auto ri = std::make_unique<RenderItem>();
+            float angle = i * (MathHelper::Pi / 4.0f);
+            float r = 148.0f;
+            float y = lightHeights[ring];
+
+            XMMATRIX world = XMMatrixRotationY(-angle) * XMMatrixTranslation(r * cos(angle), y, r * sin(angle));
+            XMStoreFloat4x4(&ri->World, world);
+
+            ri->ObjCBIndex = 93 + lightIndex;
+            ri->Geo = mGeometries["towerGeo"].get();
+            ri->IndexCount = ri->Geo->DrawArgs["lightBox"].IndexCount;
+            ri->StartIndexLocation = ri->Geo->DrawArgs["lightBox"].StartIndexLocation;
+            ri->BaseVertexLocation = ri->Geo->DrawArgs["lightBox"].BaseVertexLocation;
+            mOpaqueRitems.push_back(ri.get());
+            mAllRitems.push_back(std::move(ri));
+
+            lightIndex++; // Increment so each box gets a unique ObjCBIndex
+        }
+    }
+
+    // 6. Energy Sparks (ObjCBIndex 117)
+    auto sparks = std::make_unique<RenderItem>();
+    XMStoreFloat4x4(&sparks->World, XMMatrixIdentity());
+    sparks->ObjCBIndex = 117; // Give it the next available index
+    sparks->Geo = mGeometries["sparkGeo"].get();
+
+    // CRITICAL: Tell the API these are POINTS, not triangles
+    sparks->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_POINTLIST;
+
+    sparks->IndexCount = sparks->Geo->DrawArgs["sparks"].IndexCount;
+    sparks->StartIndexLocation = sparks->Geo->DrawArgs["sparks"].StartIndexLocation;
+    sparks->BaseVertexLocation = sparks->Geo->DrawArgs["sparks"].BaseVertexLocation;
+
+    mSparkRitems.push_back(sparks.get());
+    mAllRitems.push_back(std::move(sparks));
+
+    // 7. Car (OBjCBIndex 118)
+    auto car = std::make_unique<RenderItem>();
+    XMStoreFloat4x4(&car->World, XMMatrixScaling(5.0f, 5.0f, 5.0f) * XMMatrixTranslation(60.0f, carHeight, 70.0f));
+    car->ObjCBIndex = 118;
+    car->Geo = mGeometries["carGeo"].get();
+    car->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    car->IndexCount = car->Geo->DrawArgs["car"].IndexCount;
+    car->StartIndexLocation = car->Geo->DrawArgs["car"].StartIndexLocation;
+    car->BaseVertexLocation = car->Geo->DrawArgs["car"].BaseVertexLocation;
+    mOpaqueRitems.push_back(car.get());
+    mAllRitems.push_back(std::move(car));
+
+    // 7b. Torch Billboards (ObjCBIndex 119)
+    auto torches = std::make_unique<RenderItem>();
+    XMStoreFloat4x4(&torches->World, XMMatrixIdentity());
+    torches->ObjCBIndex = 119;
+    torches->Geo = mGeometries["torchGeo"].get();
+    torches->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_POINTLIST;
+    torches->IndexCount = torches->Geo->DrawArgs["torches"].IndexCount;
+    torches->StartIndexLocation = torches->Geo->DrawArgs["torches"].StartIndexLocation;
+    torches->BaseVertexLocation = torches->Geo->DrawArgs["torches"].BaseVertexLocation;
+    mTorchRitems.push_back(torches.get());
+    mAllRitems.push_back(std::move(torches));
 }
 
 void TowerGameApp::BuildRootSignature() {
@@ -309,6 +637,11 @@ void TowerGameApp::BuildRootSignature() {
 void TowerGameApp::BuildShadersAndInputLayout() {
     mvsByteCode = d3dUtil::CompileShader(L"shaders\\Default.hlsl", nullptr, "VS", "vs_5_0");
     mpsByteCode = d3dUtil::CompileShader(L"shaders\\Default.hlsl", nullptr, "PS", "ps_5_0");
+    mgsByteCode = d3dUtil::CompileShader(L"shaders\\Default.hlsl", nullptr, "GS", "gs_5_0");
+    mgsTorchByteCode = d3dUtil::CompileShader(L"shaders\\Default.hlsl", nullptr, "GS_Torch", "gs_5_0");
+    mvsTorchByteCode = d3dUtil::CompileShader(L"shaders\\Default.hlsl", nullptr, "VS_Torch", "vs_5_0");
+    mpsTorchByteCode = d3dUtil::CompileShader(L"shaders\\Default.hlsl", nullptr, "PS_Torch", "ps_5_0");
+
     mInputLayout = {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
@@ -339,7 +672,7 @@ void TowerGameApp::BuildPSOs() {
     // Opaque PSO (unchanged)
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mOpaquePSO)));
 
-    // --- NEW: Transparent PSO — copy opaque desc, then enable alpha blending ---
+    // --- NEW: Transparent PSO ï¿½ copy opaque desc, then enable alpha blending ---
     D3D12_GRAPHICS_PIPELINE_STATE_DESC transparentDesc = psoDesc;
 
     D3D12_RENDER_TARGET_BLEND_DESC blendDesc;
@@ -360,11 +693,25 @@ void TowerGameApp::BuildPSOs() {
     // but disable depth writes so it doesn't block objects behind it
     transparentDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
 
+    // --- Spark Particle PSO ---
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC sparkDesc = transparentDesc; // Copy the alpha blending settings
+    sparkDesc.GS = { reinterpret_cast<BYTE*>(mgsByteCode->GetBufferPointer()), mgsByteCode->GetBufferSize() };
+    sparkDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
+
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&transparentDesc, IID_PPV_ARGS(&mTransparentPSO)));
+    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&sparkDesc, IID_PPV_ARGS(&mSparkPSO)));
+
+    // --- Torch Billboard PSO ---
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC torchDesc = transparentDesc;
+    torchDesc.VS = { reinterpret_cast<BYTE*>(mvsTorchByteCode->GetBufferPointer()), mvsTorchByteCode->GetBufferSize() };
+    torchDesc.GS = { reinterpret_cast<BYTE*>(mgsTorchByteCode->GetBufferPointer()), mgsTorchByteCode->GetBufferSize() };
+    torchDesc.PS = { reinterpret_cast<BYTE*>(mpsTorchByteCode->GetBufferPointer()), mpsTorchByteCode->GetBufferSize() };
+    torchDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
+    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&torchDesc, IID_PPV_ARGS(&mTorchPSO)));
 }
 
 void TowerGameApp::BuildFrameResources() {
-    for (int i = 0; i < 3; ++i) mFrameResources.push_back(std::make_unique<FrameResource>(md3dDevice.Get(), 1, 200));
+    for (int i = 0; i < 3; ++i) mFrameResources.push_back(std::make_unique<FrameResource>(md3dDevice.Get(), 1, 250));
 }
 
 void TowerGameApp::OnMouseDown(WPARAM btnState, int x, int y) { mLastMousePos.x = x; mLastMousePos.y = y; SetCapture(mhMainWnd); }

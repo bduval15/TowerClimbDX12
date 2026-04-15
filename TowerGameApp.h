@@ -30,6 +30,8 @@ private:
     float mYaw = 0.0f;
     // Pseudo-Physics
     float mVerticalVelocity = 0.0f;
+    float eyeLevel = 10.0f;
+    float carHeight = 1000.0f + 12.0f; // add 12.0 so car is on "floor"
     bool mIsJumping = false;
     bool mHasWon = false;   
     virtual void OnMouseDown(WPARAM btnState, int x, int y) override;
@@ -39,6 +41,8 @@ private:
     virtual void Update(const GameTimer& gt) override;
     virtual void Draw(const GameTimer& gt) override;
     void BuildTowerGeometry();
+    void BuildCarGeometry();
+    void BuildRenderItems();
     void BuildShadersAndInputLayout();
     void BuildPSOs();
     void BuildFrameResources();
@@ -51,10 +55,18 @@ private:
     ComPtr<ID3D12PipelineState> mTransparentPSO = nullptr;   
     ComPtr<ID3DBlob> mvsByteCode = nullptr;
     ComPtr<ID3DBlob> mpsByteCode = nullptr;
+    ComPtr<ID3DBlob> mgsByteCode = nullptr;            
+    ComPtr<ID3D12PipelineState> mSparkPSO = nullptr;   
+    ComPtr<ID3D12PipelineState> mTorchPSO = nullptr;
+    ComPtr<ID3DBlob> mgsTorchByteCode = nullptr;
+    ComPtr<ID3DBlob> mvsTorchByteCode = nullptr;
+    ComPtr<ID3DBlob> mpsTorchByteCode = nullptr;
     std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;
     std::unordered_map<std::string, std::unique_ptr<MeshGeometry>> mGeometries;
     std::vector<std::unique_ptr<RenderItem>> mAllRitems;
-    std::vector<RenderItem*> mOpaqueRitems;                 
+    std::vector<RenderItem*> mOpaqueRitems;   
+    std::vector<RenderItem*> mSparkRitems;
+    std::vector<RenderItem*> mTorchRitems;
     RenderItem* mOrbRitem = nullptr;                         
     RenderItem* mLavaRitem = nullptr;
     Camera mCamera;
