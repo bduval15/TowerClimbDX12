@@ -1,70 +1,62 @@
-# 🏰 TowerClimbDX12
+# TowerClimbDX12
 
-## 📝 Project Description
+## Project Description
 
-**Tower Climber** is a 3D first-person platforming environment developed using **DirectX 12**, **Win32**, and **C++**. The environment consists of a massive interior tower spire containing procedurally generated floating platforms.
+TowerClimbDX12 is a Windows desktop environment demo built with Win32, C++, DirectX 12, and the Frank Luna framework. The scene is a large interior tower filled with rotating climb platforms, dynamic lighting, a glowing goal orb, an animated stencil portal, geometry-shader particles, generated textures, and imported 3D models.
 
-The game features a physics-based movement system including gravity and jumping mechanics. The platforms rotate automatically around the tower's center to provide a dynamic gameplay challenge. The visual style is achieved through custom HLSL shaders implementing ambient lighting, directional "sun" lighting, and a dynamic point light that follows the player's position.
+## Build And Run
 
----
+1. Open `TowerClimbDX12.vcxproj` or `TowerClimbDX12.slnx` in Visual Studio.
+2. Use the `Debug` configuration and `x64` platform.
+3. Build and run with `F5`.
 
-## 🚀 Getting Started
+If Visual Studio asks to retarget the project, accept the suggested Windows SDK update.
 
-### Prerequisites
+## Controls
 
-* **Visual Studio 2022** (or 2026 Preview)
-* **C++ Desktop Development Workload** (installed via VS Installer)
-* **Windows 10/11 SDK**
+The application shows the active controls in small text at the top-left corner of the window.
 
-### Installation & Launch
+Default startup mode is `Free-Fly Demo`.
 
-1. **Clone the Repository:**
-   `git clone https://github.com/[your-username]/TowerClimbDX12.git`
+- `Mouse`: look around
+- `F`: toggle between free-fly and third-person mode
+- `Esc`: quit
 
-2. **Open the Solution:**
-   Navigate to the project folder and double-click `TowerClimbDX12.sln`.
+Free-fly mode:
+- `W/A/S/D`: move
+- `Q/E`: move down/up
+- `Shift`: faster fly speed
 
-3. **Retargeting (If Prompted):**
-   If Visual Studio asks to "Retarget Projects," click **OK** to match your local Windows SDK version.
+Third-person mode:
+- `W/A/S/D`: move the character
+- `Space`: jump
+- `Q/E`: zoom out/in
+- `Shift`: faster movement
 
-4. **Build & Run:**
-   Set the configuration to **Debug** and the platform to **x64**. Press **F5** to start.
+## Main Features
 
----
+- DirectX 12 tower environment with custom render items and multiple pipeline states
+- Toggleable free-fly and third-person camera system
+- Automatic moving platforms driven by elapsed time
+- 48 point lights plus custom fog and atmospheric shading
+- Generated textures for the environment, portal, and character
+- Stencil-masked animated portal effect
+- Geometry shader sparks and torch billboards
+- Imported car model from `models/car.txt`
+- Imported guardian character model from `models/guardian.txt`
 
-## 🛠 Project Configuration
+## Project Structure
 
-These settings are saved in the `.vcxproj` file. If you need to verify them manually, check **Project Properties**:
+- `TowerGameApp.cpp` and `TowerGameApp.h`: main app logic, rendering, input, and gameplay systems
+- `FrameResource.cpp` and `FrameResource.h`: frame resources and constant buffers
+- `shaders/Default.hlsl`: lighting, fog, portal, and material shading
+- `models/`: imported text-based mesh assets
+- `Common/`: Frank Luna helper framework files
 
-* **Include Directories:** `$(ProjectDir);$(ProjectDir)Common;`
-* **C++ Standard:** `ISO C++17 Standard (/std:c++17)` or higher.
-* **Conformance Mode:** Set to **No**. (Required for the Frank Luna framework).
-* **SubSystem:** `Windows (/SUBSYSTEM:WINDOWS)`
-* **Linker Dependencies:** `d3d12.lib;dxgi.lib;d3dcompiler.lib;`
-* **Shader Setting:** `Default.hlsl` must be set to **"Does not participate in build"** in its file properties.
+## Libraries And Sources
 
----
-
-## 🎮 Controls
-
-* **W / A / S / D:** Walk and Strafe
-* **Spacebar:** Jump
-* **Left Mouse (Hold + Drag):** Look around (Pitch/Yaw)
-* **Escape:** Exit application
-
----
-
-## 📂 Project Structure
-
-* **TowerGameApp.cpp / .h**: Main entry point, update loop, and physics.
-* **FrameResource.cpp / .h**: CPU/GPU synchronization and constant buffers.
-* **shaders/Default.hlsl**: GPU lighting and vertex logic.
-* **Common/**: Frank Luna framework helper classes.
-
----
-
-## 📚 Citations & Libraries
-
-* **Framework:** Built using the `d3dApp` framework from *Introduction to 3D Game Programming with DirectX 12* by Frank Luna.
-* **API:** Microsoft DirectX 12 and DirectXMath.
-* **Asset Loading:** `DDSTextureLoader` for DDS textures.
+- Frank Luna, *Introduction to 3D Game Programming with DirectX 12*
+- Microsoft DirectX 12, DXGI, D3DCompiler, and DirectXMath
+- Frank Luna helper files in `Common/`
+- Microsoft `DDSTextureLoader` source in `Common/`
+- Imported mesh assets in `models/car.txt` and `models/guardian.txt`
