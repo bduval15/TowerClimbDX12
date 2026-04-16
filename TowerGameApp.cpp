@@ -5,6 +5,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <numeric>
+#include <random>
 
 namespace
 {
@@ -649,6 +651,11 @@ TowerGameApp::TowerGameApp(HINSTANCE hInstance) : D3DApp(hInstance) {
 }
 
 TowerGameApp::~TowerGameApp() {
+    if (mControlsOverlay != nullptr) {
+        DestroyWindow(mControlsOverlay);
+        mControlsOverlay = nullptr;
+    }
+
     if (mControlsFont != nullptr) {
         DeleteObject(mControlsFont);
         mControlsFont = nullptr;
@@ -665,8 +672,12 @@ bool TowerGameApp::Initialize() {
 
     ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
 
-    mPlayerPosition = XMFLOAT3(0.0f, eyeLevel, -30.0f);
-    UpdateFlyCamera();
+    mCamera.SetPosition(0.0f, 85.0f, -110.0f);
+    mCamera.LookAt(
+        XMFLOAT3(0.0f, 85.0f, -110.0f),
+        XMFLOAT3(0.0f, 120.0f, 0.0f),
+        XMFLOAT3(0.0f, 1.0f, 0.0f));
+    mCamera.UpdateViewMatrix();
 
     BuildTextures();
     BuildDescriptorHeaps();
@@ -687,7 +698,6 @@ bool TowerGameApp::Initialize() {
 
     CreateControlsOverlay();
     UpdateControlsOverlay();
-    UpdateCharacterTransform();
 
     return true;
 }
@@ -711,7 +721,7 @@ void TowerGameApp::OnResize() {
     D3DApp::OnResize();
     mCamera.SetLens(0.25f * MathHelper::Pi, AspectRatio(), 1.0f, 2000.0f);
     if (mControlsOverlay != nullptr) {
-        SetWindowPos(mControlsOverlay, HWND_TOP, 12, 12, 360, 92, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        MoveWindow(mControlsOverlay, 12, 12, 390, 88, TRUE);
     }
 }
 
@@ -732,11 +742,11 @@ void TowerGameApp::CreateControlsOverlay() {
             0,
             L"STATIC",
             L"",
-            WS_CHILD | WS_VISIBLE | SS_LEFT,
+            WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
             12,
             12,
-            360,
-            92,
+            390,
+            88,
             mhMainWnd,
             nullptr,
             mhAppInst,
@@ -745,7 +755,8 @@ void TowerGameApp::CreateControlsOverlay() {
 
     if (mControlsOverlay != nullptr) {
         SendMessageW(mControlsOverlay, WM_SETFONT, reinterpret_cast<WPARAM>(mControlsFont), TRUE);
-        SetWindowPos(mControlsOverlay, HWND_TOP, 12, 12, 360, 92, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        ShowWindow(mControlsOverlay, SW_SHOW);
+        UpdateWindow(mControlsOverlay);
     }
 }
 
@@ -754,95 +765,14 @@ void TowerGameApp::UpdateControlsOverlay() {
         return;
     }
 
-    const std::wstring modeLabel = mFreeFlyMode ? L"Mode: Free-Fly Demo" : L"Mode: Third-Person";
     const std::wstring controlsText =
-        modeLabel + L"   |   F toggles view\r\n"
-        L"Mouse: look around\r\n"
-        L"Free-fly: WASD move, Q/E down/up, Shift boost\r\n"
-        L"Third-person: WASD move, Space jump, Q/E zoom";
+        L"Controls\r\n"
+        L"WASD move   |   Q/E down/up   |   Shift boost\r\n"
+        L"Hold left mouse and drag to look around\r\n"
+        L"Esc quits";
 
     SetWindowTextW(mControlsOverlay, controlsText.c_str());
-}
-
-void TowerGameApp::UpdateCharacterTransform() {
-    if (mCharacterRitem == nullptr) {
-        return;
-    }
-
-    const float characterBaseY = mPlayerPosition.y - eyeLevel;
-    const XMMATRIX world =
-        XMMatrixScaling(0.90f, 0.90f, 0.90f) *
-        XMMatrixRotationY(mYaw) *
-        XMMatrixTranslation(mPlayerPosition.x, characterBaseY, mPlayerPosition.z);
-
-    XMStoreFloat4x4(&mCharacterRitem->World, world);
-}
-
-void TowerGameApp::UpdateChaseCamera() {
-    XMFLOAT3 target = mPlayerPosition;
-    target.y += mCameraLookOffset;
-
-    const float pitchCos = std::cos(mPitch);
-    const XMFLOAT3 lookDir = {
-        std::sin(mYaw) * pitchCos,
-        -std::sin(mPitch),
-        std::cos(mYaw) * pitchCos
-    };
-
-    constexpr float kTowerCameraRadius = 132.0f;
-    constexpr float kTowerCameraRadiusSq = kTowerCameraRadius * kTowerCameraRadius;
-
-    XMFLOAT3 eye = target;
-    bool foundInteriorPosition = false;
-
-    for (float distance = mCameraDistance; distance >= mMinCameraDistance; distance -= 1.5f) {
-        XMFLOAT3 candidate = {
-            target.x - lookDir.x * distance,
-            target.y - lookDir.y * distance,
-            target.z - lookDir.z * distance
-        };
-
-        const float radialDistanceSq = candidate.x * candidate.x + candidate.z * candidate.z;
-        if (radialDistanceSq <= kTowerCameraRadiusSq) {
-            eye = candidate;
-            foundInteriorPosition = true;
-            break;
-        }
-
-        eye = candidate;
-    }
-
-    if (!foundInteriorPosition) {
-        const float radialDistance = std::sqrt(eye.x * eye.x + eye.z * eye.z);
-        if (radialDistance > kTowerCameraRadius) {
-            const float scale = kTowerCameraRadius / radialDistance;
-            eye.x *= scale;
-            eye.z *= scale;
-        }
-    }
-
-    eye.y = std::clamp(eye.y, eyeLevel + 2.0f, 1200.0f);
-
-    mCamera.LookAt(eye, target, XMFLOAT3(0.0f, 1.0f, 0.0f));
-    mCamera.UpdateViewMatrix();
-}
-
-void TowerGameApp::UpdateFlyCamera() {
-    const float pitchCos = std::cos(mFlyPitch);
-    const XMFLOAT3 lookDir = {
-        std::sin(mFlyYaw) * pitchCos,
-        -std::sin(mFlyPitch),
-        std::cos(mFlyYaw) * pitchCos
-    };
-
-    const XMFLOAT3 target = {
-        mFlyCameraPosition.x + lookDir.x,
-        mFlyCameraPosition.y + lookDir.y,
-        mFlyCameraPosition.z + lookDir.z
-    };
-
-    mCamera.LookAt(mFlyCameraPosition, target, XMFLOAT3(0.0f, 1.0f, 0.0f));
-    mCamera.UpdateViewMatrix();
+    InvalidateRect(mControlsOverlay, nullptr, TRUE);
 }
 
 void TowerGameApp::Update(const GameTimer& gt) {
@@ -856,184 +786,31 @@ void TowerGameApp::Update(const GameTimer& gt) {
     }
 
     const float dt = gt.DeltaTime();
+    const float moveSpeed = ((GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 110.0f : 65.0f) * dt;
+    if (GetAsyncKeyState('W') & 0x8000) mCamera.Walk(moveSpeed);
+    if (GetAsyncKeyState('S') & 0x8000) mCamera.Walk(-moveSpeed);
+    if (GetAsyncKeyState('A') & 0x8000) mCamera.Strafe(-moveSpeed);
+    if (GetAsyncKeyState('D') & 0x8000) mCamera.Strafe(moveSpeed);
 
-    const bool togglePressed = (GetAsyncKeyState('F') & 0x8000) != 0;
-    if (togglePressed && !mToggleViewPressed) {
-        mFreeFlyMode = !mFreeFlyMode;
+    XMFLOAT3 pos = mCamera.GetPosition3f();
+    if (GetAsyncKeyState('E') & 0x8000) pos.y += moveSpeed;
+    if (GetAsyncKeyState('Q') & 0x8000) pos.y -= moveSpeed;
+    pos.y = std::clamp(pos.y, 6.0f, 1400.0f);
+    mCamera.SetPosition(pos);
+    mCamera.UpdateViewMatrix();
 
-        if (mFreeFlyMode) {
-            const XMFLOAT3 look = mCamera.GetLook3f();
-            mFlyCameraPosition = mCamera.GetPosition3f();
-            mFlyYaw = std::atan2(look.x, look.z);
-            mFlyPitch = std::asin(std::clamp(-look.y, -0.98f, 0.98f));
-            UpdateFlyCamera();
+    if (!mHasWon) {
+        XMFLOAT3 orbPos = XMFLOAT3(0.0f, 1100.0f, 0.0f);
+        float dx = pos.x - orbPos.x;
+        float dy = pos.y - orbPos.y;
+        float dz = pos.z - orbPos.z;
+        float distSq = dx * dx + dy * dy + dz * dz;
+
+        if (distSq < 50.0f * 50.0f) {
+            mHasWon = true;
+            MessageBox(mhMainWnd, L"You reached the orb! YOU WIN!", L"VICTORY!", MB_OK);
         }
-        else {
-            UpdateChaseCamera();
-        }
-
-        UpdateControlsOverlay();
     }
-    mToggleViewPressed = togglePressed;
-
-    if (mFreeFlyMode) {
-        const float flySpeed = ((GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 110.0f : 65.0f) * dt;
-        const float pitchCos = std::cos(mFlyPitch);
-        const XMFLOAT3 forward = {
-            std::sin(mFlyYaw) * pitchCos,
-            -std::sin(mFlyPitch),
-            std::cos(mFlyYaw) * pitchCos
-        };
-        const XMFLOAT3 right = {
-            std::cos(mFlyYaw),
-            0.0f,
-            -std::sin(mFlyYaw)
-        };
-
-        if (GetAsyncKeyState('W') & 0x8000) {
-            mFlyCameraPosition.x += forward.x * flySpeed;
-            mFlyCameraPosition.y += forward.y * flySpeed;
-            mFlyCameraPosition.z += forward.z * flySpeed;
-        }
-        if (GetAsyncKeyState('S') & 0x8000) {
-            mFlyCameraPosition.x -= forward.x * flySpeed;
-            mFlyCameraPosition.y -= forward.y * flySpeed;
-            mFlyCameraPosition.z -= forward.z * flySpeed;
-        }
-        if (GetAsyncKeyState('A') & 0x8000) {
-            mFlyCameraPosition.x -= right.x * flySpeed;
-            mFlyCameraPosition.z -= right.z * flySpeed;
-        }
-        if (GetAsyncKeyState('D') & 0x8000) {
-            mFlyCameraPosition.x += right.x * flySpeed;
-            mFlyCameraPosition.z += right.z * flySpeed;
-        }
-        if (GetAsyncKeyState('E') & 0x8000) mFlyCameraPosition.y += flySpeed;
-        if (GetAsyncKeyState('Q') & 0x8000) mFlyCameraPosition.y -= flySpeed;
-
-        UpdateFlyCamera();
-    }
-    else {
-        const float moveSpeed = ((GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 64.0f : 46.0f) * dt;
-        const float zoomSpeed = 24.0f * dt;
-
-        if (GetAsyncKeyState('Q') & 0x8000) mCameraDistance = std::clamp(mCameraDistance + zoomSpeed, mMinCameraDistance, mMaxCameraDistance);
-        if (GetAsyncKeyState('E') & 0x8000) mCameraDistance = std::clamp(mCameraDistance - zoomSpeed, mMinCameraDistance, mMaxCameraDistance);
-
-        XMFLOAT3 pos = mPlayerPosition;
-        XMFLOAT3 moveDir = { 0.0f, 0.0f, 0.0f };
-        const XMFLOAT3 forward = { std::sin(mYaw), 0.0f, std::cos(mYaw) };
-        const XMFLOAT3 right = { std::cos(mYaw), 0.0f, -std::sin(mYaw) };
-
-        if (GetAsyncKeyState('W') & 0x8000) {
-            moveDir.x += forward.x;
-            moveDir.z += forward.z;
-        }
-        if (GetAsyncKeyState('S') & 0x8000) {
-            moveDir.x -= forward.x;
-            moveDir.z -= forward.z;
-        }
-        if (GetAsyncKeyState('D') & 0x8000) {
-            moveDir.x += right.x;
-            moveDir.z += right.z;
-        }
-        if (GetAsyncKeyState('A') & 0x8000) {
-            moveDir.x -= right.x;
-            moveDir.z -= right.z;
-        }
-
-        const float moveLengthSq = moveDir.x * moveDir.x + moveDir.z * moveDir.z;
-        if (moveLengthSq > 0.0f) {
-            const float invMoveLength = 1.0f / std::sqrt(moveLengthSq);
-            pos.x += moveDir.x * invMoveLength * moveSpeed;
-            pos.z += moveDir.z * invMoveLength * moveSpeed;
-        }
-
-        if ((GetAsyncKeyState(VK_SPACE) & 0x8000) && !mIsJumping) {
-            mVerticalVelocity = 90.0f;
-            mIsJumping = true;
-        }
-        mVerticalVelocity -= 150.0f * dt;
-
-        float nextY = pos.y + (mVerticalVelocity * dt);
-
-        if (mCarRitem != nullptr) {
-            if (pos.x > 60.0f - 18.0f && pos.x < 60.0f + 18.0f &&
-                pos.z > 70.0f - 35.0f && pos.z < 70.0f + 35.0f) {
-
-                if (mVerticalVelocity <= 0 && pos.y >= carHeight + 4.5f && nextY <= carHeight + eyeLevel) {
-                    nextY = carHeight + eyeLevel;
-                    mVerticalVelocity = 0.0f;
-                    mIsJumping = false;
-                }
-            }
-        }
-
-        for (auto* ri : mPlatformRitems) {
-            const float time = gt.TotalTime();
-            const float angle = 0.4f * time * (ri->ObjCBIndex % 2 == 0 ? 1.0f : -1.0f);
-            const XMMATRIX baseWorld = XMLoadFloat4x4(&ri->World);
-            const XMMATRIX animatedWorld = baseWorld * XMMatrixRotationY(angle);
-
-            const float px = animatedWorld.r[3].m128_f32[0];
-            const float py = animatedWorld.r[3].m128_f32[1];
-            const float pz = animatedWorld.r[3].m128_f32[2];
-
-            const float previousAngle = 0.4f * (time - dt) * (ri->ObjCBIndex % 2 == 0 ? 1.0f : -1.0f);
-            const XMMATRIX previousAnimatedWorld = baseWorld * XMMatrixRotationY(previousAngle);
-            const float prvPx = previousAnimatedWorld.r[3].m128_f32[0];
-            const float prvPy = previousAnimatedWorld.r[3].m128_f32[1];
-            const float prvPz = previousAnimatedWorld.r[3].m128_f32[2];
-
-            if (pos.x > px - 8.0f && pos.x < px + 8.0f &&
-                pos.z > pz - 8.0f && pos.z < pz + 8.0f) {
-                if (mVerticalVelocity <= 0 && pos.y >= py + 4.5f && nextY <= py + eyeLevel) {
-                    nextY = py + eyeLevel;
-                    mVerticalVelocity = 0.0f;
-                    mIsJumping = false;
-
-                    pos.x += px - prvPx;
-                    pos.y += py - prvPy;
-                    pos.z += pz - prvPz;
-                    break;
-                }
-            }
-        }
-
-        if (mPedestalRitem != nullptr) {
-            if (std::abs(pos.x) < 34.0f && std::abs(pos.z) < 34.0f) {
-                if (mVerticalVelocity <= 0 && pos.y >= mSummitPedestalTop + 4.5f && nextY <= mSummitPedestalTop + eyeLevel) {
-                    nextY = mSummitPedestalTop + eyeLevel;
-                    mVerticalVelocity = 0.0f;
-                    mIsJumping = false;
-                }
-            }
-        }
-
-        if (nextY < eyeLevel) {
-            nextY = eyeLevel;
-            mVerticalVelocity = 0.0f;
-            mIsJumping = false;
-        }
-
-        if (!mHasWon) {
-            XMFLOAT3 orbPos = XMFLOAT3(0.0f, 1100.0f, 0.0f);
-            float dx = pos.x - orbPos.x;
-            float dy = pos.y - orbPos.y;
-            float dz = pos.z - orbPos.z;
-            float distSq = dx * dx + dy * dy + dz * dz;
-
-            if (distSq < 50.0f * 50.0f) {
-                mHasWon = true;
-                MessageBox(mhMainWnd, L"You reached the orb! YOU WIN!", L"VICTORY!", MB_OK);
-            }
-        }
-
-        mPlayerPosition = XMFLOAT3(pos.x, nextY, pos.z);
-        UpdateChaseCamera();
-    }
-
-    UpdateCharacterTransform();
 
     PassConstants passCB;
     XMMATRIX view = mCamera.GetView();
@@ -1754,27 +1531,57 @@ void TowerGameApp::BuildRenderItems() {
     mOpaqueRitems.push_back(car.get());
     mAllRitems.push_back(std::move(car));
 
-    auto character = std::make_unique<RenderItem>();
-    XMStoreFloat4x4(&character->World, XMMatrixScaling(0.90f, 0.90f, 0.90f) * XMMatrixTranslation(0.0f, 0.0f, -30.0f));
-    character->ObjCBIndex = 123;
     const auto characterGeoIt = mGeometries.find("characterGeo");
     if (characterGeoIt == mGeometries.end() || !characterGeoIt->second) {
         throw DxException(E_FAIL, L"characterGeo", L"TowerGameApp.cpp", __LINE__);
     }
-    character->Geo = characterGeoIt->second.get();
-    character->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    const auto characterSubmeshIt = character->Geo->DrawArgs.find("character");
-    if (characterSubmeshIt == character->Geo->DrawArgs.end()) {
+    auto* characterGeo = characterGeoIt->second.get();
+    const auto characterSubmeshIt = characterGeo->DrawArgs.find("character");
+    if (characterSubmeshIt == characterGeo->DrawArgs.end()) {
         throw DxException(E_FAIL, L"character draw args", L"TowerGameApp.cpp", __LINE__);
     }
-    character->IndexCount = characterSubmeshIt->second.IndexCount;
-    character->StartIndexLocation = characterSubmeshIt->second.StartIndexLocation;
-    character->BaseVertexLocation = characterSubmeshIt->second.BaseVertexLocation;
-    character->MaterialIndex = kMaterialCharacter;
-    character->DiffuseSrvHeapIndex = kCharacterTextureIndex;
-    mCharacterRitem = character.get();
-    mOpaqueRitems.push_back(character.get());
-    mAllRitems.push_back(std::move(character));
+    std::vector<int> guardianPlatformIndices(mPlatformRitems.size());
+    std::iota(guardianPlatformIndices.begin(), guardianPlatformIndices.end(), 0);
+    std::mt19937 guardianRng(27);
+    std::shuffle(guardianPlatformIndices.begin(), guardianPlatformIndices.end(), guardianRng);
+    std::uniform_real_distribution<float> guardianOffset(-2.4f, 2.4f);
+    std::uniform_real_distribution<float> guardianYaw(0.0f, kTwoPi);
+    const int guardianCount = std::min<int>(6, static_cast<int>(guardianPlatformIndices.size()));
+    for (int i = 0; i < guardianCount; ++i) {
+        const auto* hostPlatform = mPlatformRitems[guardianPlatformIndices[i]];
+        const XMFLOAT4X4& platformWorld = hostPlatform->World;
+        const float localOffsetX = guardianOffset(guardianRng);
+        const float localOffsetZ = guardianOffset(guardianRng);
+        const float facing = guardianYaw(guardianRng);
+
+        auto guardian = std::make_unique<RenderItem>();
+        XMStoreFloat4x4(
+            &guardian->World,
+            XMMatrixScaling(0.95f, 0.95f, 0.95f) *
+            XMMatrixRotationY(facing) *
+            XMMatrixTranslation(
+                platformWorld._41 + localOffsetX,
+                platformWorld._42 + 7.5f,
+                platformWorld._43 + localOffsetZ));
+
+        guardian->ObjCBIndex = 200 + (i * 2) + (hostPlatform->ObjCBIndex % 2);
+
+        guardian->Geo = characterGeo;
+        guardian->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+        guardian->IndexCount = characterSubmeshIt->second.IndexCount;
+        guardian->StartIndexLocation = characterSubmeshIt->second.StartIndexLocation;
+        guardian->BaseVertexLocation = characterSubmeshIt->second.BaseVertexLocation;
+        guardian->MaterialIndex = kMaterialCharacter;
+        guardian->DiffuseSrvHeapIndex = kCharacterTextureIndex;
+        guardian->IsAnimated = true;
+
+        if (mCharacterRitem == nullptr) {
+            mCharacterRitem = guardian.get();
+        }
+
+        mOpaqueRitems.push_back(guardian.get());
+        mAllRitems.push_back(std::move(guardian));
+    }
 
     // 7b. Torch Billboards (ObjCBIndex 119)
     auto torches = std::make_unique<RenderItem>();
@@ -1960,30 +1767,30 @@ void TowerGameApp::BuildFrameResources() {
     for (int i = 0; i < 3; ++i) mFrameResources.push_back(std::make_unique<FrameResource>(md3dDevice.Get(), 1, 256));
 }
 
-void TowerGameApp::OnMouseDown(WPARAM btnState, int x, int y) { mLastMousePos.x = x; mLastMousePos.y = y; mHasMousePosition = true; }
-void TowerGameApp::OnMouseUp(WPARAM btnState, int x, int y) { mLastMousePos.x = x; mLastMousePos.y = y; mHasMousePosition = true; }
-void TowerGameApp::OnMouseMove(WPARAM btnState, int x, int y) {
-    if (!mHasMousePosition) {
+void TowerGameApp::OnMouseDown(WPARAM btnState, int x, int y) {
+    if ((btnState & MK_LBUTTON) != 0) {
         mLastMousePos.x = x;
         mLastMousePos.y = y;
-        mHasMousePosition = true;
-        return;
+        SetCapture(mhMainWnd);
     }
+}
 
-    if (GetForegroundWindow() == mhMainWnd && !mAppPaused) {
-        const float dx = XMConvertToRadians(0.18f * static_cast<float>(x - mLastMousePos.x));
-        const float dy = XMConvertToRadians(0.18f * static_cast<float>(y - mLastMousePos.y));
+void TowerGameApp::OnMouseUp(WPARAM btnState, int x, int y) {
+    mLastMousePos.x = x;
+    mLastMousePos.y = y;
 
-        if (mFreeFlyMode) {
-            mFlyYaw += dx;
-            mFlyPitch = std::clamp(mFlyPitch + dy, -1.15f, 1.15f);
-            UpdateFlyCamera();
-        }
-        else {
-            mYaw += dx;
-            mPitch = std::clamp(mPitch + dy, 0.12f, 0.95f);
-            UpdateChaseCamera();
-        }
+    if ((btnState & MK_LBUTTON) == 0 && GetCapture() == mhMainWnd) {
+        ReleaseCapture();
+    }
+}
+
+void TowerGameApp::OnMouseMove(WPARAM btnState, int x, int y) {
+    if ((btnState & MK_LBUTTON) != 0 && GetCapture() == mhMainWnd && !mAppPaused) {
+        const float dx = XMConvertToRadians(0.22f * static_cast<float>(x - mLastMousePos.x));
+        const float dy = XMConvertToRadians(0.22f * static_cast<float>(y - mLastMousePos.y));
+        mCamera.Pitch(dy);
+        mCamera.RotateY(dx);
+        mCamera.UpdateViewMatrix();
     }
 
     mLastMousePos.x = x;

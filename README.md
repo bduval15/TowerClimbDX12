@@ -16,27 +16,16 @@ If Visual Studio asks to retarget the project, accept the suggested Windows SDK 
 
 The application shows the active controls in small text at the top-left corner of the window.
 
-Default startup mode is `Free-Fly Demo`.
-
-- `Mouse`: look around
-- `F`: toggle between free-fly and third-person mode
+- `Hold left mouse and drag`: look around
 - `Esc`: quit
-
-Free-fly mode:
 - `W/A/S/D`: move
 - `Q/E`: move down/up
 - `Shift`: faster fly speed
 
-Third-person mode:
-- `W/A/S/D`: move the character
-- `Space`: jump
-- `Q/E`: zoom out/in
-- `Shift`: faster movement
-
 ## Main Features
 
 - DirectX 12 tower environment with custom render items and multiple pipeline states
-- Toggleable free-fly and third-person camera system
+- First-person free-fly camera for presenting the environment
 - Automatic moving platforms driven by elapsed time
 - 48 point lights plus custom fog and atmospheric shading
 - Generated textures for the environment, portal, and character
@@ -44,6 +33,7 @@ Third-person mode:
 - Geometry shader sparks and torch billboards
 - Imported car model from `models/car.txt`
 - Imported guardian character model from `models/guardian.txt`
+- Multiple glowing guardian sentries placed across randomly selected rotating platforms
 
 ## Project Structure
 

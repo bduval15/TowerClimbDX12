@@ -39,28 +39,10 @@ public:
     virtual LRESULT MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) override;
 private:
     POINT mLastMousePos;
-    float mPitch = 0.20f;
-    float mYaw = 0.0f;
-    XMFLOAT3 mPlayerPosition = { 0.0f, 10.0f, -30.0f };
-    float mCameraDistance = 20.0f;
-    float mMinCameraDistance = 11.0f;
-    float mMaxCameraDistance = 28.0f;
-    float mCameraLookOffset = 7.0f;
-    bool mFreeFlyMode = true;
-    bool mToggleViewPressed = false;
-    bool mHasMousePosition = false;
-    float mFlyPitch = 0.05f;
-    float mFlyYaw = 0.0f;
-    XMFLOAT3 mFlyCameraPosition = { 0.0f, 85.0f, -110.0f };
     HWND mControlsOverlay = nullptr;
     HFONT mControlsFont = nullptr;
     HBRUSH mControlsBrush = nullptr;
-    // Pseudo-Physics
-    float mVerticalVelocity = 0.0f;
-    float eyeLevel = 10.0f;
     float carHeight = 1000.0f + 12.0f; // add 12.0 so car is on "floor"
-    float mSummitPedestalTop = 1088.0f;
-    bool mIsJumping = false;
     bool mHasWon = false;   
     virtual void OnMouseDown(WPARAM btnState, int x, int y) override;
     virtual void OnMouseUp(WPARAM btnState, int x, int y) override;
@@ -81,9 +63,6 @@ private:
     void BuildRootSignature();
     void CreateControlsOverlay();
     void UpdateControlsOverlay();
-    void UpdateCharacterTransform();
-    void UpdateChaseCamera();
-    void UpdateFlyCamera();
     std::vector<std::unique_ptr<FrameResource>> mFrameResources;
     FrameResource* mCurrFrameResource = nullptr;
     int mCurrFrameResourceIndex = 0;

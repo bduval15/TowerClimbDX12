@@ -174,12 +174,18 @@ float4 PS(VertexOut pin) : SV_Target
         baseColor *= float3(1.0f, 0.96f, 0.82f);
     }
 
+    float3 emissive = float3(0.0f, 0.0f, 0.0f);
     if (gMaterialIndex == 8)
     {
         float visorGlow = smoothstep(0.20f, 0.10f, abs(pin.TexC.y - 0.15f)) *
                           smoothstep(0.28f, 0.08f, abs(pin.TexC.x - 0.5f));
-        baseColor *= float3(0.92f, 1.02f, 1.08f);
-        baseColor += float3(0.04f, 0.12f, 0.16f) * visorGlow;
+        float bandGlow = smoothstep(0.12f, 0.0f, abs(frac(pin.TexC.y * 3.0f) - 0.5f));
+        float pulse = 0.68f + 0.32f * sin(gTotalTime * 3.4f + pin.PosW.y * 0.05f);
+
+        baseColor *= float3(0.88f, 0.98f, 1.08f);
+        baseColor += float3(0.05f, 0.12f, 0.18f) * visorGlow;
+        emissive = float3(0.08f, 0.65f, 0.85f) * visorGlow * (1.6f + pulse);
+        emissive += float3(0.03f, 0.22f, 0.34f) * bandGlow * (0.45f + pulse);
     }
 
     float3 finalLight = ambient + sunColor + (pointColor * 0.6f);
@@ -188,7 +194,7 @@ float4 PS(VertexOut pin) : SV_Target
         finalLight += ComputePointLight(gLights[i], pin.PosW, N);
     }
 
-    float3 litColor = ApplyHeightFog(baseColor * finalLight, pin.PosW, 1.0f);
+    float3 litColor = ApplyHeightFog(baseColor * finalLight + emissive, pin.PosW, 1.0f);
     return float4(litColor, texSample.a);
 }
 
